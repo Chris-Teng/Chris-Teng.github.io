@@ -8,83 +8,69 @@
   body{margin:0;font-family:sans-serif;background:#111;color:#eee;display:flex;flex-direction:column;height:100vh}
   #msg{flex:none;padding:10px;text-align:center;font-size:1.2em}
   video{flex:1;object-fit:cover;background:#000}
-  input,button{position:fixed;font-size:16px}
-  input{top:10px;left:10px;width:120px}
-  button{bottom:20px;right:20px;padding:10px 20px}
+  #roomBox{position:fixed;top:10px;left:10px;background:#222;padding:8px;border-radius:4px}
+  button{padding:6px 10px;margin-left:6px}
 </style>
 </head>
 <body>
 <div id="msg">正在连接…</div>
 <video id="local" autoplay muted playsinline></video>
 <video id="remote" autoplay playsinline></video>
-<input id="roomInput" placeholder="输入房间号" />
-<button id="muteBtn" style="display:none">静音</button>
 
-<!-- 引入 PeerJS（公共信令） -->
+<div id="roomBox">
+  <span id="roomDisplay"></span>
+  <button onclick="copyLink()">复制链接</button>
+</div>
+
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
-// ========== 1. 可修改配置 ==========
-const TURN_URL   = 'turn:your.turn.com:3478';  // 改成你的 coturn
-const TURN_USER  = 'user';
-const TURN_PASS  = 'pass';
+// ===== 仅用 Cloudflare STUN =====
+const iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 
-// ========== 2. ICE 列表 ==========
-const iceServers = [
-  {},                                          // 空对象：优先尝试直连
-  { urls: 'stun:stun.cloudflare.com:3478' },    // 免费 STUN
-  { urls: TURN_URL, username: TURN_USER, credential: TURN_PASS }
-];
-
-// ========== 3. 初始化 PeerJS ==========
-const peer = new Peer({      // 不写 key 就走公共信令
-  config: { iceServers }     // 把 ICE 传进去
-});
-
+const peer        = new Peer({ config: { iceServers } });
 const localVideo  = document.getElementById('local');
 const remoteVideo = document.getElementById('remote');
 const msg         = document.getElementById('msg');
-const roomInput   = document.getElementById('roomInput');
-const muteBtn     = document.getElementById('muteBtn');
-let localStream, muted = false;
+const roomDisplay = document.getElementById('roomDisplay');
+let localStream;
 
-// 生成或加入房间
-function init() {
-  // 如果 URL 带 hash，直接作为房间号
-  const room = location.hash.slice(1) || Math.random().toString(36).substr(2,8).toUpperCase();
-  roomInput.value = room;
-  history.replaceState(null,'',`#${room}`);
+// 生成/读取房间号
+const roomId = location.hash.slice(1) || (Math.random().toString(36)+'00000000').substr(2,8).toUpperCase();
+if (!location.hash) location.hash = roomId;
+roomDisplay.textContent = roomId;
 
-  // 等待摄像头
-  navigator.mediaDevices.getUserMedia({video:true, audio:true})
-    .then(stream => {
-      localVideo.srcObject = localStream = stream;
-      peer.on('call', call => {           // 有人呼叫
-        call.answer(stream);
-        setupCall(call);
-      });
-
-      peer.on('open', id => {             // 本地 PeerID 已就绪
-        if (id !== room) peer.disconnect();   // 保证房间号=PeerID
-        msg.textContent = `等待对方…房间号：${room}`;
-      });
-
-      // 自己主动呼叫
-      if (location.hash.slice(1)) {
-        const conn = peer.connect(room);
-        conn.on('open', () => {
-          const call = peer.call(room, stream);
-          setupCall(call);
-        });
-      }
-    })
-    .catch(err => alert('摄像头权限失败：'+err));
+// 复制邀请链接
+function copyLink() {
+  navigator.clipboard.writeText(location.href);
+  alert('已复制：'+location.href);
 }
 
-// 统一处理远端流
-function setupCall(call) {
-  call.on('stream', remoteStream => {
-    remoteVideo.srcObject = remoteStream;
-    msg.textContent = '已连接';
-    muteBtn.style.display = 'inline-block';
-  });
-  call.on('close', () => msg.textContent = '对方已离开');
+// 媒体 & 呼叫
+navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+  .then(stream => {
+    localVideo.srcObject = localStream = stream;
+
+    peer.on('open', id => {
+      if (id !== roomId) peer.disconnect();
+      if (id === roomId) msg.textContent = '等待对方…';
+    });
+
+    peer.on('call', call => {
+      call.answer(stream);
+      call.on('stream', s => { remoteVideo.srcObject = s; msg.textContent = '已连接'; });
+      call.on('close',   () => msg.textContent = '对方已离开');
+    });
+
+    if (location.hash.slice(1) && location.hash.slice(1) !== peer.id) {
+      const conn = peer.connect(roomId);
+      conn.on('open', () => {
+        const call = peer.call(roomId, stream);
+        call.on('stream', s => { remoteVideo.srcObject = s; msg.textContent = '已连接'; });
+        call.on('close',   () => msg.textContent = '对方已离开');
+      });
+    }
+  })
+  .catch(e => alert('摄像头权限失败：'+e));
+</script>
+</body>
+</html>
