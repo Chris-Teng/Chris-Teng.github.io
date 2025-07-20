@@ -8,64 +8,83 @@
   body{margin:0;font-family:sans-serif;background:#111;color:#eee;display:flex;flex-direction:column;height:100vh}
   #msg{flex:none;padding:10px;text-align:center;font-size:1.2em}
   video{flex:1;object-fit:cover;background:#000}
-  button{position:fixed;bottom:20px;right:20px;padding:10px 20px;font-size:16px}
+  input,button{position:fixed;font-size:16px}
+  input{top:10px;left:10px;width:120px}
+  button{bottom:20px;right:20px;padding:10px 20px}
 </style>
 </head>
 <body>
 <div id="msg">正在连接…</div>
 <video id="local" autoplay muted playsinline></video>
 <video id="remote" autoplay playsinline></video>
+<input id="roomInput" placeholder="输入房间号" />
 <button id="muteBtn" style="display:none">静音</button>
 
-<script type="module">
-const cfg = {iceServers:[{urls:'stun:turn.cloudflare.com:3478'}]};
-const localVideo = document.getElementById('local');
+<!-- 引入 PeerJS（公共信令） -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+// ========== 1. 可修改配置 ==========
+const TURN_URL   = 'turn:your.turn.com:3478';  // 改成你的 coturn
+const TURN_USER  = 'user';
+const TURN_PASS  = 'pass';
+
+// ========== 2. ICE 列表 ==========
+const iceServers = [
+  {},                                          // 空对象：优先尝试直连
+  { urls: 'stun:stun.l.google.com:19302' },    // 免费 STUN
+  { urls: TURN_URL, username: TURN_USER, credential: TURN_PASS }
+];
+
+// ========== 3. 初始化 PeerJS ==========
+const peer = new Peer({      // 不写 key 就走公共信令
+  config: { iceServers }     // 把 ICE 传进去
+});
+
+const localVideo  = document.getElementById('local');
 const remoteVideo = document.getElementById('remote');
-const msg = document.getElementById('msg');
-const muteBtn = document.getElementById('muteBtn');
+const msg         = document.getElementById('msg');
+const roomInput   = document.getElementById('roomInput');
+const muteBtn     = document.getElementById('muteBtn');
+let localStream, muted = false;
 
-let pc, localStream, muted=false;
+// 生成或加入房间
+function init() {
+  // 如果 URL 带 hash，直接作为房间号
+  const room = location.hash.slice(1) || Math.random().toString(36).substr(2,8).toUpperCase();
+  roomInput.value = room;
+  history.replaceState(null,'',`#${room}`);
 
-window.startCall = async () => {
-  localStream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
-  localVideo.srcObject = localStream;
-  pc = new RTCPeerConnection(cfg);
-  pc.onicecandidate = e => {
-    if (e.candidate) return;
-    history.replaceState(null,'',`#${btoa(JSON.stringify(pc.localDescription))}`);
-  };
-  pc.ontrack = e => {
-    remoteVideo.srcObject = e.streams[0];
-    msg.textContent = '已连接';
-    muteBtn.style.display = 'inline-block';
-  };
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState==='disconnected') msg.textContent = '对方已离开';
-  };
-  localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
-};
+  // 等待摄像头
+  navigator.mediaDevices.getUserMedia({video:true, audio:true})
+    .then(stream => {
+      localVideo.srcObject = localStream = stream;
+      peer.on('call', call => {           // 有人呼叫
+        call.answer(stream);
+        setupCall(call);
+      });
 
-const hash = location.hash.slice(1);
-if (!hash) {            // 我是房主
-  await startCall();
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-} else {                // 我是访客
-  await startCall();
-  const offer = JSON.parse(atob(hash));
-  await pc.setRemoteDescription(offer);
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
+      peer.on('open', id => {             // 本地 PeerID 已就绪
+        if (id !== room) peer.disconnect();   // 保证房间号=PeerID
+        msg.textContent = `等待对方…房间号：${room}`;
+      });
+
+      // 自己主动呼叫
+      if (location.hash.slice(1)) {
+        const conn = peer.connect(room);
+        conn.on('open', () => {
+          const call = peer.call(room, stream);
+          setupCall(call);
+        });
+      }
+    })
+    .catch(err => alert('摄像头权限失败：'+err));
 }
 
-// 静音按钮
-muteBtn.onclick = ()=>{
-  muted = !muted;
-  localStream.getAudioTracks().forEach(t=>t.enabled=!muted);
-  muteBtn.textContent = muted ? '取消静音' : '静音';
-};
-</script>
-
-<noscript>请开启 JavaScript</noscript>
-</body>
-</html>
+// 统一处理远端流
+function setupCall(call) {
+  call.on('stream', remoteStream => {
+    remoteVideo.srcObject = remoteStream;
+    msg.textContent = '已连接';
+    muteBtn.style.display = 'inline-block';
+  });
+  call.on('close', () => msg.textContent = '对方已离开');
