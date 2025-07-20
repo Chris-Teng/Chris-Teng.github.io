@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>极简通话</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body{margin:0;font-family:sans-serif;background:#111;color:#eee;display:flex;flex-direction:column;height:100vh}
+  #msg{flex:none;padding:10px;text-align:center;font-size:1.2em}
+  video{flex:1;object-fit:cover;background:#000}
+  button{position:fixed;bottom:20px;right:20px;padding:10px 20px;font-size:16px}
+</style>
+</head>
+<body>
+<div id="msg">正在连接…</div>
+<video id="local" autoplay muted playsinline></video>
+<video id="remote" autoplay playsinline></video>
+<button id="muteBtn" style="display:none">静音</button>
+
+<script type="module">
+const cfg = {iceServers:[{urls:'stun:turn.cloudflare.com:3478'}]};
+const localVideo = document.getElementById('local');
+const remoteVideo = document.getElementById('remote');
+const msg = document.getElementById('msg');
+const muteBtn = document.getElementById('muteBtn');
+
+let pc, localStream, muted=false;
+
+window.startCall = async () => {
+  localStream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
+  localVideo.srcObject = localStream;
+  pc = new RTCPeerConnection(cfg);
+  pc.onicecandidate = e => {
+    if (e.candidate) return;
+    history.replaceState(null,'',`#${btoa(JSON.stringify(pc.localDescription))}`);
+  };
+  pc.ontrack = e => {
+    remoteVideo.srcObject = e.streams[0];
+    msg.textContent = '已连接';
+    muteBtn.style.display = 'inline-block';
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState==='disconnected') msg.textContent = '对方已离开';
+  };
+  localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+};
+
+const hash = location.hash.slice(1);
+if (!hash) {            // 我是房主
+  await startCall();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+} else {                // 我是访客
+  await startCall();
+  const offer = JSON.parse(atob(hash));
+  await pc.setRemoteDescription(offer);
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+}
+
+// 静音按钮
+muteBtn.onclick = ()=>{
+  muted = !muted;
+  localStream.getAudioTracks().forEach(t=>t.enabled=!muted);
+  muteBtn.textContent = muted ? '取消静音' : '静音';
+};
+</script>
+
+<noscript>请开启 JavaScript</noscript>
+</body>
+</html>
